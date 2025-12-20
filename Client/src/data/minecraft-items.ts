@@ -251,6 +251,8 @@ export const minecraftItems: MinecraftItem[] = [
   { id: 'minecraft:pumpkin_pie', name: 'Pumpkin Pie', category: 'Food' },
   { id: 'minecraft:honey_bottle', name: 'Honey Bottle', category: 'Food' },
   { id: 'minecraft:milk_bucket', name: 'Milk Bucket', category: 'Food' },
+  { id: 'minecraft:water_bucket', name: 'Water Bucket', category: 'Tools' },
+  { id: 'minecraft:lava_bucket', name: 'Lava Bucket', category: 'Tools' },
 
   // Special Items
   { id: 'minecraft:ender_pearl', name: 'Ender Pearl', category: 'Special' },

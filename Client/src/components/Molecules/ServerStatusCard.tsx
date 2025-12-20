@@ -30,13 +30,13 @@ export default function ServerStatusCard() {
 
   return (
     <motion.div
-      className="bg-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-lg border border-white/30 hover:shadow-xl transition-all duration-300"
+      className="minecraft-card minecraft-pattern rounded-lg p-6 transition-all duration-300"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
     >
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-2xl font-bold text-gray-800">🎮 Server Status</h2>
+        <h2 className="text-2xl font-bold text-white drop-shadow-lg pixelify-sans-bold" style={{ textShadow: '3px 3px 0px rgba(0,0,0,0.5)' }}>🎮 Server Status</h2>
         {serverStatus && (
           <Badge variant={serverStatus.online ? 'default' : 'destructive'}>
             {serverStatus.online ? '🟢 Online' : '🔴 Offline'}
@@ -45,22 +45,22 @@ export default function ServerStatusCard() {
       </div>
 
       {loading ? (
-        <div className="text-gray-600">Loading...</div>
+        <div className="text-white font-bold" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.5)' }}>Loading...</div>
       ) : (
         <div className="space-y-4">
           {/* Server Info */}
           {serverInfo && (
-            <div className="bg-white/40 rounded-2xl p-4 space-y-2">
+            <div className="minecraft-card-light minecraft-pattern rounded-lg p-4 space-y-2">
               <div className="flex justify-between">
-                <span className="text-gray-600 font-medium">IP:</span>
-                <span className="text-gray-800 font-semibold">{serverInfo.ip}:{serverInfo.port}</span>
+                <span className="text-white font-bold pixelify-sans" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.5)' }}>IP:</span>
+                <span className="text-white font-semibold pixelify-sans" style={{ textShadow: '1px 1px 0px rgba(0,0,0,0.5)' }}>{serverInfo.ip}:{serverInfo.port}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600 font-medium">MOTD:</span>
-                <span className="text-gray-800 font-semibold">{serverInfo.motd}</span>
+                <span className="text-white font-bold pixelify-sans" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.5)' }}>MOTD:</span>
+                <span className="text-white font-semibold pixelify-sans" style={{ textShadow: '1px 1px 0px rgba(0,0,0,0.5)' }}>{serverInfo.motd}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600 font-medium">Online Mode:</span>
+                <span className="text-white font-bold pixelify-sans" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.5)' }}>Online Mode:</span>
                 <Badge variant={serverInfo.onlineMode ? 'default' : 'secondary'}>
                   {serverInfo.onlineMode ? 'Enabled' : 'Disabled'}
                 </Badge>
@@ -70,15 +70,15 @@ export default function ServerStatusCard() {
 
           {/* Players */}
           {players && (
-            <div className="bg-white/40 rounded-2xl p-4">
+            <div className="minecraft-card-light minecraft-pattern rounded-lg p-4">
               <div className="flex justify-between items-center mb-2">
-                <span className="text-gray-600 font-medium">Players:</span>
+                <span className="text-white font-bold pixelify-sans" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.5)' }}>Players:</span>
                 <Badge>{players.online}/{players.max}</Badge>
               </div>
               {players.players.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {players.players.map((player, idx) => (
-                    <div key={idx} className="text-sm text-gray-700 bg-white/30 rounded-xl px-3 py-1">
+                    <div key={idx} className="text-sm text-white font-semibold minecraft-card rounded-lg px-3 py-2 pixelify-sans" style={{ textShadow: '1px 1px 0px rgba(0,0,0,0.5)' }}>
                       👤 {player}
                     </div>
                   ))}
@@ -91,5 +91,6 @@ export default function ServerStatusCard() {
     </motion.div>
   );
 }
+
 
 

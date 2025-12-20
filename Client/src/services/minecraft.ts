@@ -219,4 +219,48 @@ export const restartServer = async (): Promise<ICommandResponse> => {
   return data;
 };
 
+// System Stats
+export interface ISystemStats {
+  success: boolean;
+  data: {
+    cpu: {
+      model: string;
+      cores: number;
+      usage: number;
+      loadAverage: number[];
+    };
+    memory: {
+      total: number;
+      used: number;
+      free: number;
+      usagePercent: number;
+    };
+    disk: {
+      total: number;
+      used: number;
+      free: number;
+      percent: number;
+    };
+    network: Record<string, any[]>;
+    system: {
+      platform: string;
+      arch: string;
+      hostname: string;
+      uptime: {
+        total: number;
+        days: number;
+        hours: number;
+        minutes: number;
+        formatted: string;
+      };
+      nodeVersion: string;
+    };
+  };
+}
+
+export const getSystemStats = async (): Promise<ISystemStats> => {
+  const { data } = await dangerApi.get('/danger/stats/system');
+  return data;
+};
+
 

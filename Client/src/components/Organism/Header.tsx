@@ -1,36 +1,65 @@
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 
-export default function Header() {
+export default function Sidebar() {
+  const location = useLocation();
+
   return (
-    <header className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 w-11/12 max-w-6xl">
-      <nav className="bg-white/20 backdrop-blur-xl rounded-3xl px-6 py-4 shadow-lg border border-white/30">
-        <div className="flex items-center justify-between">
-          {/* Logo */}
-          <Link 
-            to="/" 
-            className="text-2xl font-bold text-gray-800 hover:text-blue-600 transition-colors duration-300"
-          >
-            Minecraft Controller
-          </Link>
+    <aside className="fixed left-0 top-0 h-full w-64 minecraft-card minecraft-pattern z-50 flex flex-col">
+      {/* Logo */}
+      <div className="p-6 border-b-2 border-[#5A4A3A]">
+        <Link 
+          to="/" 
+          className="text-2xl font-bold text-white pixelify-sans-bold hover:text-[#7CB342] transition-colors duration-300 block"
+          style={{ textShadow: '3px 3px 0px rgba(0,0,0,0.5)' }}
+        >
+          🎮 Minecraft Controller
+        </Link>
+      </div>
 
-          {/* Navigation Links */}
-          <div className="hidden md:flex items-center space-x-6">
-            <Link 
-              to="/" 
-              className="text-gray-700 hover:text-blue-600 hover:bg-white/40 transition-all duration-300 font-semibold text-sm px-3 py-1 rounded-xl"
-            >
-              Home
-            </Link>
-            <Link 
-              to="/minecraft" 
-              className="text-gray-700 hover:text-blue-600 hover:bg-white/40 transition-all duration-300 font-semibold text-sm px-3 py-1 rounded-xl"
-            >
-              🎮 Server Control
-            </Link>
-          </div>
-        </div>
+      {/* Navigation Links */}
+      <nav className="flex-1 p-4 space-y-2">
+        <Link 
+          to="/" 
+          className={`block px-4 py-3 rounded-lg transition-all duration-300 font-semibold text-sm pixelify-sans ${
+            location.pathname === '/'
+              ? 'minecraft-card-light text-white border-2 border-[#7CB342]'
+              : 'text-white/80 hover:text-white hover:bg-white/10'
+          }`}
+          style={{ textShadow: location.pathname === '/' ? '2px 2px 0px rgba(0,0,0,0.5)' : '1px 1px 0px rgba(0,0,0,0.5)' }}
+        >
+          🏠 Home
+        </Link>
+        <Link 
+          to="/minecraft" 
+          className={`block px-4 py-3 rounded-lg transition-all duration-300 font-semibold text-sm pixelify-sans ${
+            location.pathname === '/minecraft'
+              ? 'minecraft-card-light text-white border-2 border-[#7CB342]'
+              : 'text-white/80 hover:text-white hover:bg-white/10'
+          }`}
+          style={{ textShadow: location.pathname === '/minecraft' ? '2px 2px 0px rgba(0,0,0,0.5)' : '1px 1px 0px rgba(0,0,0,0.5)' }}
+        >
+          🎮 Server Control
+        </Link>
+        <Link 
+          to="/stats" 
+          className={`block px-4 py-3 rounded-lg transition-all duration-300 font-semibold text-sm pixelify-sans ${
+            location.pathname === '/stats'
+              ? 'minecraft-card-light text-white border-2 border-[#7CB342]'
+              : 'text-white/80 hover:text-white hover:bg-white/10'
+          }`}
+          style={{ textShadow: location.pathname === '/stats' ? '2px 2px 0px rgba(0,0,0,0.5)' : '1px 1px 0px rgba(0,0,0,0.5)' }}
+        >
+          📊 Server Stats
+        </Link>
       </nav>
-    </header>
+
+      {/* Sidebar Footer Info */}
+      <div className="p-4 border-t-2 border-[#5A4A3A]">
+        <p className="text-xs text-white/70 pixelify-sans text-center" style={{ textShadow: '1px 1px 0px rgba(0,0,0,0.5)' }}>
+          Minecraft Server Controller
+        </p>
+      </div>
+    </aside>
   );
 }
 
