@@ -17,6 +17,9 @@ export default function QuickActionsPanel() {
   const [loading, setLoading] = useState(false);
   const [giveModalOpen, setGiveModalOpen] = useState(false);
   const [serverRunning, setServerRunning] = useState<boolean | null>(null);
+  const [tpX, setTpX] = useState('0');
+  const [tpY, setTpY] = useState('64');
+  const [tpZ, setTpZ] = useState('0');
 
   const handleSaveWorld = async () => {
     setLoading(true);
@@ -60,15 +63,24 @@ export default function QuickActionsPanel() {
     }
   };
 
-  const handleTeleportSpawn = async () => {
+  const handleTeleport = async () => {
     if (!player.trim()) {
       toast.error('Please enter a player name');
       return;
     }
+    const x = parseFloat(tpX);
+    const y = parseFloat(tpY);
+    const z = parseFloat(tpZ);
+    
+    if (isNaN(x) || isNaN(y) || isNaN(z)) {
+      toast.error('Please enter valid coordinates (numbers only)');
+      return;
+    }
+    
     setLoading(true);
     try {
-      await teleportPlayer({ player, x: 0, y: 64, z: 0 });
-      toast.success(`Teleported ${player} to spawn`);
+      await teleportPlayer({ player, x, y, z });
+      toast.success(`Teleported ${player} to (${x}, ${y}, ${z})`);
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -223,20 +235,50 @@ export default function QuickActionsPanel() {
           </Button>
         </div>
 
-        {/* Player Actions */}
+        {/* Teleport Player */}
         <div className="bg-white/40 rounded-2xl p-4 space-y-2">
-          <label className="text-sm font-medium text-gray-700">Player Name</label>
+          <label className="text-sm font-medium text-gray-700">Teleport Player</label>
           <Input
             type="text"
             placeholder="Player name..."
             value={player}
             onChange={(e) => setPlayer(e.target.value)}
           />
-          <div className="grid grid-cols-1 gap-2">
-            <Button onClick={handleTeleportSpawn} disabled={loading} className="w-full">
-              🚀 TP to Spawn
-            </Button>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-600">X Coordinate</label>
+              <Input
+                type="number"
+                placeholder="X"
+                value={tpX}
+                onChange={(e) => setTpX(e.target.value)}
+                step="0.1"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-600">Y Coordinate</label>
+              <Input
+                type="number"
+                placeholder="Y"
+                value={tpY}
+                onChange={(e) => setTpY(e.target.value)}
+                step="0.1"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-600">Z Coordinate</label>
+              <Input
+                type="number"
+                placeholder="Z"
+                value={tpZ}
+                onChange={(e) => setTpZ(e.target.value)}
+                step="0.1"
+              />
+            </div>
           </div>
+          <Button onClick={handleTeleport} disabled={loading || !player.trim()} className="w-full">
+            🚀 Teleport Player
+          </Button>
         </div>
       </div>
 

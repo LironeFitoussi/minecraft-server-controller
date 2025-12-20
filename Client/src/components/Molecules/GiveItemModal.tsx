@@ -41,16 +41,14 @@ export default function GiveItemModal({
   const filteredItems = useMemo(() => {
     let items = minecraftItems;
 
-    // Filter by category
-    if (selectedCategory !== 'All') {
-      items = items.filter(item => item.category === selectedCategory);
+    // Filter by search query first
+    if (searchQuery.trim()) {
+      items = searchItems(searchQuery);
     }
 
-    // Filter by search query
-    if (searchQuery.trim()) {
-      items = searchItems(searchQuery).filter(item =>
-        selectedCategory === 'All' || item.category === selectedCategory
-      );
+    // Then filter by category
+    if (selectedCategory !== 'All') {
+      items = items.filter(item => item.category === selectedCategory);
     }
 
     return items;
