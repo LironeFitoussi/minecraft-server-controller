@@ -6,16 +6,25 @@ import rateLimit from "express-rate-limit";
 import morgan from "morgan";
 
 // Config
-import connectDB from "./config/db.js";
 import { errorHandler } from "./utils/errorHandler.js";
 
 // Routes
-import userRoutes from "./routes/user.routes.js";
-import authRoutes from "./routes/auth.routes.js";
 import dangerRoutes from "./routes/dangerRoutes.js";
+import minecraftRoutes from "./routes/minecraft.routes.js";
 
 // Config Middleware
 dotenv.config();
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
 
 // Initialize express app
 const app = express();
@@ -27,13 +36,27 @@ if (!PORT) {
     throw new Error("PORT is not set");
 } 
 
-if (!CLIENT_URL) {
-    throw new Error("CLIENT_URL is not set");
-}
-
-// Cors
+// Cors - Allow both dev (5173) and production (80)
 app.use(cors({
-    origin: process.env.CLIENT_URL,
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) {
+            return callback(null, true);
+        }
+        
+        // Allow localhost on any port for development
+        if (origin.startsWith('http://localhost:') || origin === 'http://localhost') {
+            return callback(null, true);
+        }
+        
+        // Allow from environment variable
+        if (process.env.CLIENT_URL && origin === process.env.CLIENT_URL) {
+            return callback(null, true);
+        }
+        
+        // Allow all for development (can restrict in production)
+        callback(null, true);
+    },
     credentials: true,
 }));
 
@@ -46,9 +69,6 @@ app.use(rateLimit({
 // Morgan 
 app.use(morgan("dev")); // dev is the format of the logs
 
-// Connect to database
-connectDB();
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -58,13 +78,19 @@ app.get("/health", (req, res) => {
     res.json({ success: true, message: "Server is healthy" });
 });
 
-app.use("/api/users", userRoutes);
-app.use("/api/auth", authRoutes);
+// Test endpoint to verify API connectivity
+app.get("/api/test", (req, res) => {
+    res.json({ success: true, message: "API is working", timestamp: new Date().toISOString() });
+});
+
+app.use("/api/minecraft", minecraftRoutes);
 app.use("/danger", dangerRoutes);
 
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+app.listen(parseInt(PORT), '0.0.0.0', () => {
     console.log(`🚀 Server is running on port ${PORT}`);
+    console.log(`📡 API endpoints available at http://localhost:${PORT}/api/minecraft`);
+    console.log(`🏥 Health check: http://localhost:${PORT}/health`);
 });

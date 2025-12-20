@@ -1,0 +1,26 @@
+[Unit]
+Description=Minecraft Server Controller - Web Dashboard
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lirone
+Group=lirone
+WorkingDirectory=/home/lirone/minecraft-server-controller/Server
+Environment=NODE_ENV=production
+EnvironmentFile=/home/lirone/minecraft-server-controller/Server/.env
+ExecStart=/usr/bin/node /home/lirone/minecraft-server-controller/Server/dist/server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/lirone/minecraft-server-controller
+
+[Install]
+WantedBy=multi-user.target

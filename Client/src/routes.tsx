@@ -1,6 +1,6 @@
 import Layout from "./pages/Layout";
 import HomePage, {HomePageLoader} from "./pages/HomePage";
-import ProfilePage from "./pages/ProfilePage";
+import MinecraftDashboardPage from "./pages/MinecraftDashboardPage";
 
 export const routes = [
   {
@@ -14,9 +14,9 @@ export const routes = [
         name: "Home",
       },
       {
-        path: "/profile",
-        Component: ProfilePage,
-        name: "Profile",
+        path: "/minecraft",
+        Component: MinecraftDashboardPage,
+        name: "Minecraft Server",
       },
     ],
   },

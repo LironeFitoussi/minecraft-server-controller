@@ -1,0 +1,22 @@
+{
+  "name": "minecraft-server-controller",
+  "version": "1.0.0",
+  "description": "Minecraft Server Controller - Professional MERN Stack",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd Server && npm run dev",
+    "dev:client": "cd Client && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build:server": "cd Server && npm run build",
+    "build:client": "cd Client && npm run build",
+    "build": "npm run build:server && npm run build:client",
+    "start:server": "cd Server && npm start",
+    "start:client": "cd Client && npm run preview",
+    "install:all": "npm install && cd Server && npm install && cd ../Client && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
+
+

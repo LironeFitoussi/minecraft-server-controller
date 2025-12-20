@@ -11,7 +11,10 @@ export const asyncHandler = (fn: Function) => {
 
 // Enhanced error handler middleware
 export const errorHandler = (error: any, req: Request, res: Response, next: NextFunction) => {
-  // console.error('Error:', error);
+  console.error('Error:', error.message || error);
+  if (process.env.NODE_ENV === 'development') {
+    console.error('Stack:', error.stack);
+  }
   
   // Handle different types of errors
   error = handleMongooseError(error);
@@ -31,8 +34,11 @@ export const errorHandler = (error: any, req: Request, res: Response, next: Next
   if (error.errors) {
     errorResponse.errors = error.errors;
   }
-    
-  res.status(statusCode).json(errorResponse);
+  
+  // Make sure response hasn't been sent already
+  if (!res.headersSent) {
+    res.status(statusCode).json(errorResponse);
+  }
 };
 
 export class AppError extends Error {

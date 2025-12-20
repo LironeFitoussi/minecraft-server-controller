@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node dist/server.js",
     "dev": "tsx --watch src/server.ts",
-    "build": "tsc -b && tsc-alias"
+    "build": "tsc -b && tsc-alias -p tsconfig.json --resolve-full-paths && node fix-imports.js"
   },
   "keywords": [],
   "author": "",
@@ -19,12 +19,12 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
-    "express-oauth2-jwt-bearer": "^1.7.1",
     "express-rate-limit": "^8.1.0",
     "i": "^0.3.7",
     "mongoose": "^8.18.2",
     "morgan": "^1.10.1",
     "npm": "^11.6.1",
+    "rcon": "^1.1.0",
     "tsx": "^4.20.5",
     "zod": "^4.1.11"
   },

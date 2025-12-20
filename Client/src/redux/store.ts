@@ -1,16 +1,12 @@
 import { configureStore } from '@reduxjs/toolkit';
-import userSlice from './slices/userSlice';
+
+// Dummy reducer to satisfy Redux requirements
+const dummyReducer = (state = {}) => state;
 
 export const store = configureStore({
   reducer: {
-    user: userSlice,
+    app: dummyReducer,
   },
-  middleware: (getDefaultMiddleware) =>
-    getDefaultMiddleware({
-      serializableCheck: {
-        ignoredActions: ['persist/PERSIST', 'persist/REHYDRATE'],
-      },
-    }),
 });
 
 export type RootState = ReturnType<typeof store.getState>;
