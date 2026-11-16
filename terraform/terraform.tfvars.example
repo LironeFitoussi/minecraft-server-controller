@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and adjust.
+accept_eula = true
+
+# region            = "il-central-1"   # must be enabled in the account first
+# availability_zone = "il-central-1a"  # fixed forever once the disk exists
+# instance_type     = "t4g.medium"
+# minecraft_version = "1.21.8"
+
+# Your home IP, for direct access to the dashboard and SSH (optional).
+# admin_cidrs    = ["203.0.113.7/32"]
+# ssh_public_key = "ssh-ed25519 AAAA... you@mac"
+
+# Optional DNS record that follows the server's IP.
+# route53_zone_id = "Z0123456789ABCDEFGHIJ"
+# dns_name        = "mc.example.com"

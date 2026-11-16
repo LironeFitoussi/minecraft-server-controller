@@ -1,0 +1,321 @@
+#!/bin/bash
+# Boot script for the on-demand Minecraft server (Amazon Linux 2023).
+# Rendered by Terraform: values in dollar-braces are filled in at plan time.
+set -euo pipefail
+exec > >(tee -a /var/log/minecraft-bootstrap.log) 2>&1
+echo "=== bootstrap started: $(date -Is) ==="
+
+REGION="${region}"
+VOLUME_ID="${volume_id}"
+ASG_NAME="${asg_name}"
+MC_VERSION="${minecraft_version}"
+IDLE_MINUTES="${idle_minutes}"
+MOUNT=/opt/minecraft
+SERVER_DIR=$MOUNT/server
+RCON_PASSWORD_FILE=$MOUNT/rcon_password
+RCON_PORT=25575
+
+imds() {
+  local token
+  token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+  curl -sf -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/$1"
+}
+INSTANCE_ID=$(imds instance-id)
+
+# ---------------------------------------------------------------------------
+# 1. Shutdown + idle check go in first, so a machine whose setup fails later
+#    still turns itself off instead of running (and costing money) forever.
+# ---------------------------------------------------------------------------
+cat > /usr/local/bin/mc-shutdown <<'EOF'
+#!/bin/bash
+# Stop Minecraft cleanly (it saves the world), then ask AWS to delete this machine.
+systemctl stop minecraft 2>/dev/null || true
+sync
+exec aws autoscaling set-desired-capacity --region "${region}" \
+  --auto-scaling-group-name "${asg_name}" --desired-capacity 0
+EOF
+chmod +x /usr/local/bin/mc-shutdown
+
+cat > /usr/local/bin/mc-idle-check <<'EOF'
+#!/bin/bash
+# Runs every 5 minutes. Counts consecutive checks with nobody connected.
+COUNT_FILE=/run/mc-idle-count
+CONNECTED=$(ss -Htn state established '( sport = :25565 )' | wc -l)
+if [ "$CONNECTED" -gt 0 ]; then
+  echo 0 > "$COUNT_FILE"
+  exit 0
+fi
+COUNT=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
+echo "$COUNT" > "$COUNT_FILE"
+echo "no players connected for $((COUNT * 5)) minutes (limit: ${idle_minutes})"
+if [ $((COUNT * 5)) -ge ${idle_minutes} ]; then
+  echo "idle limit reached, shutting down"
+  /usr/local/bin/mc-shutdown
+fi
+EOF
+chmod +x /usr/local/bin/mc-idle-check
+
+cat > /etc/systemd/system/mc-idle-check.service <<'EOF'
+[Unit]
+Description=Shut the Minecraft server down when nobody is playing
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mc-idle-check
+EOF
+
+cat > /etc/systemd/system/mc-idle-check.timer <<'EOF'
+[Unit]
+Description=Check every 5 minutes whether anybody is playing
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+if [ "$IDLE_MINUTES" -gt 0 ]; then
+  systemctl enable --now mc-idle-check.timer
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Packages
+# ---------------------------------------------------------------------------
+dnf install -y -q "${java_package}" jq git
+
+# A little swap so building the dashboard next to a running server can't OOM
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Attach and mount the world disk
+# ---------------------------------------------------------------------------
+DEVICE="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$(echo "$VOLUME_ID" | tr -d '-')"
+echo "attaching $VOLUME_ID"
+# Retries cover the case where the previous server is still letting go of the disk
+for _ in $(seq 1 72); do
+  [ -e "$DEVICE" ] && break
+  aws ec2 attach-volume --region "$REGION" --volume-id "$VOLUME_ID" \
+    --instance-id "$INSTANCE_ID" --device /dev/sdf >/dev/null 2>&1 || true
+  sleep 5
+done
+if [ ! -e "$DEVICE" ]; then
+  echo "FATAL: world disk did not attach"
+  exit 1
+fi
+
+# Format ONLY a brand-new, empty disk. (mkfs.xfs also refuses to overwrite an
+# existing filesystem on its own, as a second line of defence.)
+FSTYPE=$(blkid -o value -s TYPE "$DEVICE" || true)
+if [ -z "$FSTYPE" ]; then
+  echo "empty disk, creating filesystem"
+  mkfs.xfs "$DEVICE"
+fi
+
+mkdir -p "$MOUNT"
+UUID=$(blkid -s UUID -o value "$DEVICE")
+grep -q "$UUID" /etc/fstab || echo "UUID=$UUID $MOUNT xfs defaults,nofail 0 2" >> /etc/fstab
+mountpoint -q "$MOUNT" || mount "$MOUNT"
+
+# ---------------------------------------------------------------------------
+# 4. Minecraft
+# ---------------------------------------------------------------------------
+# Fixed uid so files on the disk keep the same owner on every new machine
+id minecraft >/dev/null 2>&1 || useradd --system --uid 25565 --create-home --home-dir /home/minecraft --shell /sbin/nologin minecraft
+mkdir -p "$SERVER_DIR"
+cd "$SERVER_DIR"
+
+if [ ! -f server.jar ]; then
+  echo "downloading Minecraft server $MC_VERSION"
+  MANIFEST=$(curl -sf https://piston-meta.mojang.com/mc/game/version_manifest_v2.json)
+  if [ "$MC_VERSION" = "latest" ]; then
+    MC_VERSION=$(jq -r '.latest.release' <<<"$MANIFEST")
+  fi
+  VERSION_URL=$(jq -r --arg v "$MC_VERSION" '.versions[] | select(.id == $v) | .url' <<<"$MANIFEST")
+  if [ -z "$VERSION_URL" ]; then
+    echo "FATAL: unknown Minecraft version $MC_VERSION"
+    exit 1
+  fi
+  JAR_URL=$(curl -sf "$VERSION_URL" | jq -r '.downloads.server.url')
+  curl -sf -o server.jar "$JAR_URL"
+fi
+
+echo "eula=true" > eula.txt
+
+# RCON is only reachable from this machine; the dashboard uses it
+if [ ! -s "$RCON_PASSWORD_FILE" ]; then
+  (umask 077 && openssl rand -hex 16 > "$RCON_PASSWORD_FILE")
+fi
+RCON_PASSWORD=$(cat "$RCON_PASSWORD_FILE")
+
+touch server.properties
+set_prop() {
+  if grep -q "^$1=" server.properties; then
+    sed -i "s|^$1=.*|$1=$2|" server.properties
+  else
+    echo "$1=$2" >> server.properties
+  fi
+}
+set_prop enable-rcon true
+set_prop rcon.port "$RCON_PORT"
+set_prop rcon.password "$RCON_PASSWORD"
+
+chown -R minecraft:minecraft "$MOUNT"
+chmod 600 "$RCON_PASSWORD_FILE"
+
+cat > /etc/systemd/system/minecraft.service <<'EOF'
+[Unit]
+Description=Minecraft server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/minecraft/server
+ExecStart=/usr/bin/java -Xms1G -Xmx${java_memory} -jar server.jar nogui
+# On SIGTERM Minecraft saves the world and exits with 143
+SuccessExitStatus=0 143
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now minecraft
+echo "minecraft service started"
+
+# ---------------------------------------------------------------------------
+# 5. DNS record that follows the new public IP (optional)
+# ---------------------------------------------------------------------------
+%{ if route53_zone_id != "" ~}
+PUBLIC_IP=$(imds public-ipv4)
+aws route53 change-resource-record-sets --hosted-zone-id "${route53_zone_id}" --change-batch "{
+  \"Changes\": [{
+    \"Action\": \"UPSERT\",
+    \"ResourceRecordSet\": {
+      \"Name\": \"${dns_name}\", \"Type\": \"A\", \"TTL\": 60,
+      \"ResourceRecords\": [{ \"Value\": \"$PUBLIC_IP\" }]
+    }
+  }]
+}" >/dev/null && echo "DNS: ${dns_name} -> $PUBLIC_IP" || echo "WARNING: DNS update failed"
+%{ endif ~}
+
+# ---------------------------------------------------------------------------
+# 6. Web dashboard (optional). A failure here must not take the game down.
+# ---------------------------------------------------------------------------
+%{ if dashboard_enabled ~}
+install_dashboard() {
+  local app=$MOUNT/controller arch node_file
+
+  # Node.js LTS straight from nodejs.org (the dashboard needs Node 20.19+)
+  if ! command -v node >/dev/null; then
+    case "$(uname -m)" in aarch64) arch=arm64 ;; *) arch=x64 ;; esac
+    node_file=$(curl -sf https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -o "node-v[0-9.]*-linux-$arch.tar.xz" | head -n1)
+    curl -sf "https://nodejs.org/dist/latest-v22.x/$node_file" | tar -xJ -C /usr/local --strip-components=1
+  fi
+  dnf install -y -q nginx
+
+  # The code and its build live on the world disk, so later boots are fast
+  local as_mc="runuser -u minecraft -- env HOME=/home/minecraft PATH=/usr/local/bin:/usr/bin:/bin"
+  if [ ! -d "$app/.git" ]; then
+    mkdir -p "$app" && chown minecraft:minecraft "$app"
+    $as_mc git clone --quiet --branch "${dashboard_branch}" "${dashboard_repo}" "$app"
+  else
+    $as_mc git -C "$app" fetch --quiet origin "${dashboard_branch}"
+    $as_mc git -C "$app" reset --quiet --hard FETCH_HEAD
+  fi
+
+  local head
+  head=$($as_mc git -C "$app" rev-parse HEAD)
+  if [ "$(cat "$app/.built-commit" 2>/dev/null)" != "$head" ]; then
+    echo "building dashboard at $head"
+    (cd "$app/Server" && $as_mc npm ci --no-audit --no-fund --silent && $as_mc npm run build --silent)
+    (cd "$app/Client" && $as_mc npm ci --no-audit --no-fund --silent && $as_mc npm run build --silent)
+    echo "$head" > "$app/.built-commit"
+  fi
+
+  cat > "$app/Server/.env" <<EOF
+PORT=5000
+NODE_ENV=production
+MINECRAFT_HOST=127.0.0.1
+MINECRAFT_RCON_PORT=$RCON_PORT
+MINECRAFT_RCON_PASSWORD_FILE=$RCON_PASSWORD_FILE
+MINECRAFT_SERVER_PROPERTIES=$SERVER_DIR/server.properties
+MINECRAFT_SERVICE=minecraft
+EOF
+  chown minecraft:minecraft "$app/Server/.env"
+
+  # Lets the dashboard's Start / Stop / Restart buttons control the service
+  echo "minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft, /usr/bin/systemctl stop minecraft, /usr/bin/systemctl restart minecraft" > /etc/sudoers.d/minecraft-controller
+  chmod 440 /etc/sudoers.d/minecraft-controller
+
+  cat > /etc/systemd/system/minecraft-controller.service <<EOF
+[Unit]
+Description=Minecraft Server Controller - web dashboard API
+After=network.target
+
+[Service]
+User=minecraft
+Group=minecraft
+WorkingDirectory=$app/Server
+EnvironmentFile=$app/Server/.env
+ExecStart=/usr/local/bin/node dist/server.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  cat > /etc/nginx/conf.d/minecraft-controller.conf <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root $app/Client/dist;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    location /danger/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+  nginx -t
+
+  systemctl daemon-reload
+  systemctl enable --now minecraft-controller nginx
+  systemctl restart minecraft-controller nginx
+}
+
+# Run in a subshell outside of an "if", so that "set -e" still applies inside it
+set +e
+(set -e; install_dashboard)
+DASHBOARD_RC=$?
+set -e
+if [ "$DASHBOARD_RC" -eq 0 ]; then
+  echo "dashboard installed"
+else
+  echo "WARNING: dashboard setup failed (the Minecraft server itself is unaffected)"
+fi
+%{ endif ~}
+
+echo "=== bootstrap finished: $(date -Is) ==="

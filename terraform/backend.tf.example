@@ -1,0 +1,11 @@
+# Copy to backend.tf, fill in your bucket, then run: terraform init -migrate-state
+# The bucket must already exist (enable versioning on it).
+terraform {
+  backend "s3" {
+    bucket       = "CHANGE-ME-terraform-state"
+    key          = "minecraft/terraform.tfstate"
+    region       = "eu-central-1"
+    encrypt      = true
+    use_lockfile = true # needs Terraform >= 1.10; remove on older versions
+  }
+}
