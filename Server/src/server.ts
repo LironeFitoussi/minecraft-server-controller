@@ -1,6 +1,8 @@
+// Load .env before any other module reads process.env
+import "dotenv/config";
+
 // Modules imports
 import express from "express";
-import dotenv from "dotenv";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import morgan from "morgan";
@@ -11,9 +13,6 @@ import { errorHandler } from "./utils/errorHandler.js";
 // Routes
 import dangerRoutes from "./routes/dangerRoutes.js";
 import minecraftRoutes from "./routes/minecraft.routes.js";
-
-// Config Middleware
-dotenv.config();
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
@@ -28,6 +27,8 @@ process.on('uncaughtException', (error) => {
 
 // Initialize express app
 const app = express();
+// Behind nginx: use X-Forwarded-For for the client IP (needed by the rate limiter)
+app.set("trust proxy", "loopback");
 const PORT = process.env.PORT;
 const CLIENT_URL = process.env.CLIENT_URL;
 
@@ -63,7 +64,7 @@ app.use(cors({
 // Rate Limit 
 app.use(rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    limit: 10000, // 100 requests per 15 minutes
+    limit: 10000, // requests per 15 minutes (the dashboard polls every few seconds)
 }));
 
 // Morgan 

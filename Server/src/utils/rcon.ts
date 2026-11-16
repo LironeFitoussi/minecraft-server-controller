@@ -4,17 +4,38 @@
 import Rcon from 'rcon';
 import { readFileSync } from 'fs';
 import type { IRCONConfig, IPlayerInfo, IMinecraftServerStatus } from '../types/minecraft';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+const CONNECT_TIMEOUT_MS = 5000;
+const COMMAND_TIMEOUT_MS = 10000;
+// After a failed connection, fail fast for a short while instead of making
+// every queued/polling request wait for its own connection timeout.
+const FAILURE_COOLDOWN_MS = 3000;
+// Max commands waiting in line before new ones are rejected.
+const MAX_QUEUE_LENGTH = 25;
+// Packet id/type used to mark the end of a (possibly multi-packet) response.
+const SENTINEL_ID = 0x0012d4a7;
+const SENTINEL_TYPE = 200;
+// If the server never answers the sentinel, resolve this long after the last chunk.
+const SENTINEL_FALLBACK_MS = 300;
+
+interface IPendingCommand {
+  settle: (error: Error | null, response?: string) => void;
+}
 
 class RCONService {
   private client: Rcon | null = null;
   private config: IRCONConfig | null = null;
-  private connected: boolean = false;
-  private connecting: boolean = false; // Lock to prevent multiple simultaneous connections
-  private connectionPromise: Promise<void> | null = null;
+  private connectionPromise: Promise<Rcon> | null = null;
+  // The RCON library cannot match responses to requests, so commands must run
+  // strictly one at a time. This promise chain is the queue.
+  private queue: Promise<unknown> = Promise.resolve();
+  private queueLength = 0;
+  private pending: IPendingCommand | null = null;
+  private lastFailure: { at: number; error: Error } | null = null;
 
   /**
    * Get or initialize config (lazy loading after dotenv.config())
@@ -45,182 +66,206 @@ class RCONService {
   }
 
   /**
-   * Connect to RCON server
+   * Fully close a client: detach our listeners, destroy the socket and fail
+   * whatever command was waiting on it.
    */
-  async connect(): Promise<void> {
-    // If already connected, return immediately
-    if (this.connected && this.client) {
-      return;
+  private teardown(client: Rcon | null, reason: Error): void {
+    if (client) {
+      client.removeAllListeners();
+      // A late socket error must never become an unhandled 'error' event
+      client.on('error', () => {});
+      try {
+        client.disconnect();
+        // disconnect() only half-closes; destroy so a hung socket can't linger
+        (client as any)._tcpSocket?.destroy();
+      } catch {}
     }
+    if (this.client === client) {
+      this.client = null;
+      const pending = this.pending;
+      this.pending = null;
+      pending?.settle(reason);
+    }
+  }
 
-    // If already connecting, wait for that connection to complete
-    if (this.connecting && this.connectionPromise) {
+  /**
+   * Get an authenticated RCON client, connecting if needed
+   */
+  private connect(): Promise<Rcon> {
+    if (this.client) {
+      return Promise.resolve(this.client);
+    }
+    if (this.connectionPromise) {
       return this.connectionPromise;
+    }
+    if (this.lastFailure && Date.now() - this.lastFailure.at < FAILURE_COOLDOWN_MS) {
+      return Promise.reject(this.lastFailure.error);
     }
 
     const config = this.getConfig();
     if (!config.password) {
-      throw new Error('RCON password not configured. Set MINECRAFT_RCON_PASSWORD or MINECRAFT_RCON_PASSWORD_FILE');
+      // Re-read next time so a password added later is picked up without a restart
+      this.config = null;
+      return Promise.reject(
+        new Error('RCON password not configured. Set MINECRAFT_RCON_PASSWORD or MINECRAFT_RCON_PASSWORD_FILE')
+      );
     }
 
-    // Set connecting lock
-    this.connecting = true;
+    const promise = new Promise<Rcon>((resolve, reject) => {
+      console.log(`🔌 Attempting RCON connection to ${config.host}:${config.port}`);
+      const client = new Rcon(config.host, config.port, config.password);
+      let settled = false;
 
-    // Clean up old connection if it exists
-    if (this.client) {
-      try {
-        this.client.removeAllListeners();
-        this.client.disconnect();
-      } catch {}
-      this.client = null;
-    }
-
-    this.connectionPromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.connecting = false;
-        this.connectionPromise = null;
-        if (this.client) {
-          try {
-            this.client.removeAllListeners();
-            this.client.disconnect();
-          } catch {}
-        }
-        this.connected = false;
-        this.client = null;
-        reject(new Error('RCON connection timeout. Is Minecraft server running?'));
-      }, 5000);
-
-      try {
-        console.log(`🔌 Attempting RCON connection to ${config.host}:${config.port}`);
-        this.client = new Rcon(config.host, config.port, config.password);
-
-        this.client.once('auth', () => {
-          clearTimeout(timeout);
-          this.connected = true;
-          this.connecting = false;
-          this.connectionPromise = null;
-          console.log('✅ RCON connected successfully');
-          resolve();
-        });
-
-        this.client.once('error', (err: Error) => {
-          clearTimeout(timeout);
-          this.connecting = false;
-          this.connectionPromise = null;
-          console.error('❌ RCON connection error:', err.message);
-          this.connected = false;
-          this.client = null;
-          reject(err);
-        });
-
-        this.client.on('end', () => {
-          console.log('🔌 RCON disconnected');
-          this.connected = false;
-          this.connecting = false;
-          this.connectionPromise = null;
-        });
-
-        this.client.connect();
-      } catch (error) {
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
-        this.connecting = false;
-        this.connectionPromise = null;
-        this.connected = false;
-        this.client = null;
+        console.error('❌ RCON connection error:', error.message);
+        this.lastFailure = { at: Date.now(), error };
+        if (error.message.includes('Authentication failed')) {
+          // Password may have been changed on disk; reload it on the next attempt
+          this.config = null;
+        }
+        this.teardown(client, error);
         reject(error);
+      };
+
+      const timeout = setTimeout(() => {
+        fail(new Error('RCON connection timeout. Is Minecraft server running?'));
+      }, CONNECT_TIMEOUT_MS);
+
+      client.on('error', (err: Error) => {
+        if (settled) {
+          console.error('❌ RCON error:', err.message);
+          this.teardown(client, err);
+        } else {
+          fail(err);
+        }
+      });
+
+      client.on('end', () => {
+        if (settled) {
+          console.log('🔌 RCON disconnected');
+          this.teardown(client, new Error('RCON connection closed by server'));
+        } else {
+          fail(new Error('RCON connection closed before authentication'));
+        }
+      });
+
+      client.once('auth', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        this.client = client;
+        this.lastFailure = null;
+        console.log('✅ RCON connected successfully');
+        resolve(client);
+      });
+
+      try {
+        client.connect();
+      } catch (error) {
+        fail(error as Error);
       }
+    }).finally(() => {
+      this.connectionPromise = null;
     });
 
-    return this.connectionPromise;
+    this.connectionPromise = promise;
+    return promise;
   }
 
   /**
-   * Send command to Minecraft server via RCON
+   * Send command to Minecraft server via RCON.
+   * Commands are queued and executed one at a time.
    */
-  async sendCommand(command: string): Promise<string> {
-    // Ensure we're connected before sending
-    if (!this.connected || !this.client) {
-      try {
-        await this.connect();
-        // Wait a bit to ensure auth is complete
-        await new Promise(resolve => setTimeout(resolve, 200));
-      } catch (error) {
-        const errorMsg = (error as Error).message;
-        if (errorMsg.includes('password')) {
-          throw new Error('RCON password not configured. Set MINECRAFT_RCON_PASSWORD or MINECRAFT_RCON_PASSWORD_FILE');
-        }
-        if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connect')) {
-          throw new Error('Cannot connect to Minecraft server. Is the server running and RCON is enabled?');
-        }
-        throw new Error(`RCON connection failed: ${errorMsg}`);
+  sendCommand(command: string): Promise<string> {
+    if (this.queueLength >= MAX_QUEUE_LENGTH) {
+      return Promise.reject(new Error('RCON is busy: too many commands waiting. Server may be unresponsive.'));
+    }
+    this.queueLength++;
+    const run = () => this.execute(command);
+    const result = this.queue.then(run, run).finally(() => {
+      this.queueLength--;
+    });
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
+  private async execute(command: string): Promise<string> {
+    let client: Rcon;
+    try {
+      client = await this.connect();
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      if (errorMsg.includes('password') || errorMsg.includes('timeout')) {
+        throw error;
       }
-      if (!this.connected || !this.client) {
-        throw new Error('RCON not connected. Check if Minecraft server is running and RCON is enabled in server.properties');
+      if (errorMsg.includes('Authentication failed')) {
+        throw new Error('RCON authentication failed. Check the RCON password.');
       }
+      if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connect')) {
+        throw new Error('Cannot connect to Minecraft server. Is the server running and RCON is enabled?');
+      }
+      throw new Error(`RCON connection failed: ${errorMsg}`);
     }
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        // Don't disconnect on timeout - just mark as disconnected for next attempt
-        this.connected = false;
-        reject(new Error('RCON command timeout. Server may be unresponsive.'));
-      }, 10000); // 10 seconds for commands
+    return new Promise<string>((resolve, reject) => {
+      const chunks: string[] = [];
+      let fallbackTimer: NodeJS.Timeout | undefined;
+      let done = false;
 
-      let responseReceived = false;
-      
-      const cleanup = () => {
-        if (this.client) {
-          this.client.removeListener('response', responseHandler);
-          this.client.removeListener('error', errorHandler);
-        }
+      const onResponse = (chunk: string) => {
+        chunks.push(chunk);
+        clearTimeout(fallbackTimer);
+        fallbackTimer = setTimeout(() => settle(null, chunks.join('')), SENTINEL_FALLBACK_MS);
       };
-      
-      // The rcon library ONLY uses events, not callbacks
-      // The send method signature is: send(data, cmd, id)
-      // We need to listen for the 'response' event
-      const responseHandler = (response: string) => {
-        if (!responseReceived) {
-          responseReceived = true;
-          clearTimeout(timeout);
-          cleanup();
+      // The sentinel reply arrives on the 'server' event, after all response chunks
+      // (Minecraft always sends at least one response packet first, so a
+      // sentinel that shows up before any chunk is ignored.)
+      const onSentinel = () => {
+        if (chunks.length > 0) settle(null, chunks.join(''));
+      };
+
+      const settle = (error: Error | null, response = '') => {
+        if (done) return;
+        done = true;
+        if (this.pending === pending) this.pending = null;
+        clearTimeout(timeout);
+        clearTimeout(fallbackTimer);
+        client.removeListener('response', onResponse);
+        client.removeListener('server', onSentinel);
+        if (error) {
+          console.error(`❌ RCON command "${command}" error:`, error.message);
+          reject(error);
+        } else {
           console.log(`📤 RCON command "${command}" response:`, response.substring(0, 200));
           resolve(response);
         }
       };
 
-      const errorHandler = (err: Error) => {
-        if (!responseReceived) {
-          responseReceived = true;
-          clearTimeout(timeout);
-          cleanup();
-          this.connected = false;
-          console.error(`❌ RCON command "${command}" error:`, err.message);
-          reject(err);
-        }
-      };
+      const pending: IPendingCommand = { settle };
+      this.pending = pending;
+
+      const timeout = setTimeout(() => {
+        // The connection state is unknown now (a late reply would be mistaken
+        // for the next command's answer), so drop it and reconnect next time.
+        const error = new Error('RCON command timeout. Server may be unresponsive.');
+        this.lastFailure = { at: Date.now(), error };
+        this.teardown(client, error);
+      }, COMMAND_TIMEOUT_MS);
+
+      client.on('response', onResponse);
+      client.on('server', onSentinel);
 
       try {
-        if (!this.client) {
-          clearTimeout(timeout);
-          reject(new Error('RCON client not available'));
-          return;
-        }
-
-        // Set up event listeners BEFORE sending the command
-        this.client.once('response', responseHandler);
-        this.client.once('error', errorHandler);
-        
-        // Send command - the library signature is send(data, cmd, id)
-        // cmd defaults to PacketType.COMMAND (0x02) if not provided
         console.log(`📥 Sending RCON command: "${command}"`);
-        // Type assertion needed because TypeScript types don't match actual implementation
-        (this.client as any).send(command);
+        client.send(command);
+        // Minecraft answers an unknown packet type right after the full command
+        // response, which tells us a multi-packet response is complete.
+        client.send('', SENTINEL_TYPE, SENTINEL_ID);
       } catch (error) {
-        clearTimeout(timeout);
-        cleanup();
-        this.connected = false;
-        console.error(`❌ RCON command "${command}" exception:`, (error as Error).message);
-        reject(error);
+        this.teardown(client, error as Error);
       }
     });
   }
@@ -318,7 +363,8 @@ class RCONService {
     } catch (error) {
       // Check if process is running
       try {
-        await execAsync('pgrep -f "server.jar"');
+        // No shell here: with a shell, pgrep -f would match the shell's own command line
+        await execFileAsync('pgrep', ['-f', 'server.jar']);
         return {
           online: true,
           responding: false,
@@ -336,16 +382,7 @@ class RCONService {
    * Disconnect from RCON
    */
   disconnect(): void {
-    if (this.client) {
-      try {
-        this.client.removeAllListeners();
-        this.client.disconnect();
-      } catch {}
-      this.client = null;
-    }
-    this.connected = false;
-    this.connecting = false;
-    this.connectionPromise = null;
+    this.teardown(this.client, new Error('RCON disconnected'));
   }
 }
 

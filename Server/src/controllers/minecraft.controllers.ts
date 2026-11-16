@@ -4,7 +4,7 @@
 import type { Request, Response } from 'express';
 import { rconService } from '../utils/rcon';
 import { readFileSync } from 'fs';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type {
   IGameModeRequest,
@@ -26,7 +26,7 @@ import type {
   ICommandRequest,
 } from '../types/minecraft';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // Helper to safely send response
 const sendResponse = (res: Response, status: number, data: any): void => {
@@ -38,7 +38,10 @@ const sendResponse = (res: Response, status: number, data: any): void => {
 // Helper to handle RCON errors with user-friendly messages
 const handleRconError = (res: Response, error: Error): void => {
   const errorMsg = error.message;
-  if (errorMsg.includes('timeout') || errorMsg.includes('RCON') || errorMsg.includes('connect')) {
+  if (errorMsg.includes('password') || errorMsg.includes('authentication') || errorMsg.includes('busy')) {
+    // Specific and actionable - pass it through as-is
+    sendResponse(res, 503, { success: false, error: errorMsg });
+  } else if (errorMsg.includes('timeout') || errorMsg.includes('RCON') || errorMsg.includes('connect')) {
     sendResponse(res, 503, { 
       success: false, 
       error: 'Minecraft server is not responding. Please check if the server is running and RCON is enabled.' 
@@ -84,8 +87,8 @@ class MinecraftController {
 
       // Try to get actual server IP
       try {
-        const { stdout } = await execAsync('hostname -I | awk \'{print $1}\'');
-        const ip = stdout.trim();
+        const { stdout } = await execFileAsync('hostname', ['-I'], { timeout: 3000 });
+        const ip = stdout.trim().split(/\s+/)[0];
         if (ip) serverInfo.ip = ip;
       } catch {
         // Use default
@@ -157,15 +160,7 @@ class MinecraftController {
       const response = await rconService.sendCommand(`gamemode ${mode} ${player}`);
       sendResponse(res, 200, { success: true, response });
     } catch (error) {
-      const errorMsg = (error as Error).message;
-      if (errorMsg.includes('timeout') || errorMsg.includes('RCON')) {
-        sendResponse(res, 503, { 
-          success: false, 
-          error: 'Minecraft server is not responding. Please check if the server is running and RCON is enabled.' 
-        });
-      } else {
-        sendResponse(res, 500, { success: false, error: errorMsg });
-      }
+      handleRconError(res, error as Error);
     }
   }
 
@@ -190,15 +185,7 @@ class MinecraftController {
       const response = await rconService.sendCommand(`difficulty ${difficulty}`);
       sendResponse(res, 200, { success: true, response });
     } catch (error) {
-      const errorMsg = (error as Error).message;
-      if (errorMsg.includes('timeout') || errorMsg.includes('RCON')) {
-        sendResponse(res, 503, { 
-          success: false, 
-          error: 'Minecraft server is not responding. Please check if the server is running and RCON is enabled.' 
-        });
-      } else {
-        sendResponse(res, 500, { success: false, error: errorMsg });
-      }
+      handleRconError(res, error as Error);
     }
   }
 
@@ -224,15 +211,7 @@ class MinecraftController {
       const response = await rconService.sendCommand(command);
       sendResponse(res, 200, { success: true, response });
     } catch (error) {
-      const errorMsg = (error as Error).message;
-      if (errorMsg.includes('timeout') || errorMsg.includes('RCON')) {
-        sendResponse(res, 503, { 
-          success: false, 
-          error: 'Minecraft server is not responding. Please check if the server is running and RCON is enabled.' 
-        });
-      } else {
-        sendResponse(res, 500, { success: false, error: errorMsg });
-      }
+      handleRconError(res, error as Error);
     }
   }
 
@@ -271,15 +250,7 @@ class MinecraftController {
       const response = await rconService.sendCommand(command);
       sendResponse(res, 200, { success: true, response });
     } catch (error) {
-      const errorMsg = (error as Error).message;
-      if (errorMsg.includes('timeout') || errorMsg.includes('RCON')) {
-        sendResponse(res, 503, { 
-          success: false, 
-          error: 'Minecraft server is not responding. Please check if the server is running and RCON is enabled.' 
-        });
-      } else {
-        sendResponse(res, 500, { success: false, error: errorMsg });
-      }
+      handleRconError(res, error as Error);
     }
   }
 
@@ -530,16 +501,7 @@ class MinecraftController {
       const response = await rconService.sendCommand(`say ${message}`);
       sendResponse(res, 200, { success: true, response });
     } catch (error) {
-      const errorMsg = (error as Error).message;
-      // Provide user-friendly error message
-      if (errorMsg.includes('timeout') || errorMsg.includes('RCON')) {
-        sendResponse(res, 503, { 
-          success: false, 
-          error: 'Minecraft server is not responding. Please check if the server is running and RCON is enabled.' 
-        });
-      } else {
-        sendResponse(res, 500, { success: false, error: errorMsg });
-      }
+      handleRconError(res, error as Error);
     }
   }
 

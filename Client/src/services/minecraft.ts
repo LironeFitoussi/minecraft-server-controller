@@ -177,29 +177,27 @@ export const executeCommand = async (payload: ICommandRequest): Promise<ICommand
 // Server Control
 // These routes use /danger (not /api/danger), so we use axios directly
 import axios from 'axios';
-
-const getDangerBaseURL = () => {
-  const envURL = import.meta.env.VITE_API_URL;
-  if (envURL) {
-    return envURL.replace('/api', '');
-  }
-  // Development: use relative path (Vite proxy will handle it)
-  if (import.meta.env.DEV) {
-    return '';
-  }
-  // Fallback for production
-  return 'http://localhost:5000';
-};
+import { attachErrorMessages, getServerOrigin } from './api';
 
 const dangerApi = axios.create({
-  baseURL: getDangerBaseURL(),
+  baseURL: getServerOrigin(),
   headers: {
     "Content-Type": "application/json",
   },
-  timeout: 30000,
+  timeout: 20000,
 });
 
-export const getServerControlStatus = async (): Promise<{ success: boolean; running: boolean; message: string }> => {
+attachErrorMessages(dangerApi);
+
+export interface IServerControlStatus {
+  success: boolean;
+  running: boolean;
+  // systemd state: active, activating, deactivating, inactive, failed...
+  state?: string;
+  message: string;
+}
+
+export const getServerControlStatus = async (): Promise<IServerControlStatus> => {
   const { data } = await dangerApi.get('/danger/server/status');
   return data;
 };
@@ -241,7 +239,7 @@ export interface ISystemStats {
       free: number;
       percent: number;
     };
-    network: Record<string, any[]>;
+    network: Record<string, { address: string; netmask: string; family: string; mac: string; internal: boolean }[]>;
     system: {
       platform: string;
       arch: string;

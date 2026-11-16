@@ -9,7 +9,6 @@ import { Input } from '../ui/input';
 import { saveWorld, broadcast, giveItem, teleportPlayer, startServer, stopServer, restartServer, getServerControlStatus, getPlayers } from '@/services/minecraft';
 import GiveItemModal from './GiveItemModal';
 import toast from 'react-hot-toast';
-import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 export default function QuickActionsPanel() {
@@ -17,7 +16,6 @@ export default function QuickActionsPanel() {
   const [player, setPlayer] = useState('');
   const [loading, setLoading] = useState(false);
   const [giveModalOpen, setGiveModalOpen] = useState(false);
-  const [serverRunning, setServerRunning] = useState<boolean | null>(null);
   const [tpX, setTpX] = useState('0');
   const [tpY, setTpY] = useState('64');
   const [tpZ, setTpZ] = useState('0');
@@ -98,30 +96,30 @@ export default function QuickActionsPanel() {
     }
   };
 
-  // Check server status on mount and periodically
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const status = await getServerControlStatus();
-        setServerRunning(status.running);
-      } catch (error) {
-        console.error('Failed to check server status:', error);
-      }
-    };
-
-    checkStatus();
-    const interval = setInterval(checkStatus, 5000); // Check every 5 seconds
-    return () => clearInterval(interval);
-  }, []);
+  // Service state (systemd), polled faster while the server is starting/stopping
+  const { data: controlStatus, refetch: refetchControlStatus } = useQuery({
+    queryKey: ['serverControlStatus'],
+    queryFn: getServerControlStatus,
+    refetchInterval: (query) => {
+      const state = query.state.data?.state;
+      return state === 'activating' || state === 'deactivating' ? 2000 : 5000;
+    },
+  });
+  const serverRunning = controlStatus ? controlStatus.running : null;
+  const serverState = controlStatus?.state;
+  const serverBusy = serverState === 'activating' || serverState === 'deactivating';
+  const serverLabel =
+    serverState === 'activating' ? '⏳ Starting...'
+    : serverState === 'deactivating' ? '⏳ Stopping...'
+    : serverState === 'failed' ? '⚠️ Failed'
+    : serverRunning ? '🟢 Running' : '🔴 Stopped';
 
   const handleStartServer = async () => {
     setLoading(true);
     try {
       await startServer();
       toast.success('Server start command sent');
-      setTimeout(() => {
-        getServerControlStatus().then(status => setServerRunning(status.running));
-      }, 2000);
+      void refetchControlStatus();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -137,9 +135,7 @@ export default function QuickActionsPanel() {
     try {
       await stopServer();
       toast.success('Server stop command sent');
-      setTimeout(() => {
-        getServerControlStatus().then(status => setServerRunning(status.running));
-      }, 2000);
+      void refetchControlStatus();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -155,9 +151,7 @@ export default function QuickActionsPanel() {
     try {
       await restartServer();
       toast.success('Server restart command sent');
-      setTimeout(() => {
-        getServerControlStatus().then(status => setServerRunning(status.running));
-      }, 3000);
+      void refetchControlStatus();
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -181,32 +175,34 @@ export default function QuickActionsPanel() {
             <label className="text-sm font-medium text-white font-bold pixelify-sans" style={{ textShadow: '2px 2px 0px rgba(0,0,0,0.5)' }}>Server Control</label>
             {serverRunning !== null && (
               <span className={`text-xs px-2 py-1 rounded-full ${
-                serverRunning 
+                serverBusy
+                  ? 'bg-yellow-100 text-yellow-800'
+                  : serverRunning 
                   ? 'bg-green-100 text-green-800' 
                   : 'bg-red-100 text-red-800'
               }`}>
-                {serverRunning ? '🟢 Running' : '🔴 Stopped'}
+                {serverLabel}
               </span>
             )}
           </div>
           <div className="grid grid-cols-3 gap-2">
             <Button 
               onClick={handleStartServer} 
-              disabled={loading || serverRunning === true}
+              disabled={loading || serverBusy || serverRunning === true}
               className="minecraft-button disabled:opacity-50 disabled:cursor-not-allowed"
             >
               ▶️ Start
             </Button>
             <Button 
               onClick={handleStopServer} 
-              disabled={loading || serverRunning === false}
+              disabled={loading || serverBusy || serverRunning === false}
               className="minecraft-button minecraft-button-danger disabled:opacity-50 disabled:cursor-not-allowed"
             >
               ⏹️ Stop
             </Button>
             <Button 
               onClick={handleRestartServer} 
-              disabled={loading || serverRunning === false}
+              disabled={loading || serverBusy || serverRunning === false}
               className="minecraft-button minecraft-button-warning disabled:opacity-50 disabled:cursor-not-allowed"
             >
               🔄 Restart

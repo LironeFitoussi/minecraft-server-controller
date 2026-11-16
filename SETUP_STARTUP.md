@@ -52,6 +52,22 @@ sudo systemctl restart minecraft-controller.service
 sudo systemctl disable minecraft-controller.service
 ```
 
+### Allow the dashboard to start/stop the Minecraft service
+
+The Start / Stop / Restart buttons run `sudo -n systemctl <action> minecraft`.
+Without a passwordless sudo rule they fail with a "Not permitted" error.
+Create the rule with `sudo visudo -f /etc/sudoers.d/minecraft-controller`
+(replace `lirone` with the user the dashboard runs as, and `minecraft` with
+your service name if you changed `MINECRAFT_SERVICE`):
+
+```
+lirone ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft, /usr/bin/systemctl stop minecraft, /usr/bin/systemctl restart minecraft
+```
+
+Note: the service unit must not set `NoNewPrivileges=true`, because sudo cannot
+run with it. If you installed an older copy of `minecraft-controller.service`,
+re-run `sudo ./install-service.sh` and restart the service.
+
 ## Option 2: Using PM2 (Alternative)
 
 If you prefer PM2 for process management:
